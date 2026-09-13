@@ -206,6 +206,13 @@ fn io(e: impl fmt::Display) -> StorageError {
 
 // ── the filesystem backend ──────────────────────────────────────────────────
 
+/// The prefix a half-finished [`FileStorage::write`] wears while it is staged.
+///
+/// Named once because two places have to agree: `write` stages under it and
+/// `list` skips anything wearing it, so a file left behind by a crash between
+/// the write and the rename is never reported as a key.
+const STAGE_PREFIX: &str = ".logos-stage-";
+
 /// A [`Storage`] backed by one directory.
 ///
 /// THE SAME TYPE IN BOTH BUILDS. Natively the directory is on the host's disk.
@@ -259,11 +266,10 @@ impl Storage for FileStorage {
         // Stage beside the destination and rename. Same directory, so the
         // rename is a rename and not a cross-device copy — the property the
         // atomicity rests on. The staging name carries the pid so two writers
-        // of the same key cannot collide on it, and starts with a dot so a
-        // `list()` that raced a crash does not report it as a key.
+        // of the same key cannot collide on it.
         let stage = self
             .root
-            .join(format!(".logos-stage-{}-{}", std::process::id(), key));
+            .join(format!("{STAGE_PREFIX}{}-{}", std::process::id(), key));
         std::fs::write(&stage, bytes).map_err(io)?;
         match std::fs::rename(&stage, &path) {
             Ok(()) => Ok(()),
@@ -303,7 +309,7 @@ impl Storage for FileStorage {
             }
             let name = entry.file_name().to_string_lossy().into_owned();
             // A leftover staging file is not a key. See `write`.
-            if name.starts_with(".logos-stage-") {
+            if name.starts_with(STAGE_PREFIX) {
                 continue;
             }
             out.push(name);

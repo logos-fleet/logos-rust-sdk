@@ -247,7 +247,11 @@ exactly why the barrier is named rather than implied.
 A core with its own on-disk layout — nested directories, unix modes, its own staging
 discipline — does not have to flatten itself into a key/value store to gain this. The
 barrier is also a free function, `storage::commit(dir)`, to be called where the native
-code already fsyncs. That is how `logos-evm-keystore-module` adopts it.
+code already fsyncs.
+
+`logos-evm-keystore-module` takes the other shape: its vault directory *is* a
+`FileStorage`, every mutating method ends at `commit()`, and `local_dir()` is what the
+path-based half of `eth_keystore` is pointed at.
 
 A **key** is a flat, non-empty name: no `/`, no `\`, no `.` or `..` component. Not a
 path. A store is one flat namespace because OPFS and IndexedDB are, the filesystem is
