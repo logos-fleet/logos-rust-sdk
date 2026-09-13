@@ -15,14 +15,22 @@
 //! filesystem does not have:
 //!
 //! > **[`Storage::commit`] is the durability barrier.** Data written since the
-//! > last commit is visible to this image immediately and is NOT guaranteed to
-//! > survive the image. After `commit()` returns `Ok`, it is.
+//! > last commit is not guaranteed to outlive this image. `commit()` hands it
+//! > to the durable medium; a module that never calls it keeps nothing.
 //!
-//! Natively `commit()` fsyncs and is nearly free. In a Wasm host it pushes the
-//! image's filesystem into the browser's IndexedDB through the host's
-//! `logos_storage_commit` entry point. A module written against this contract is
-//! correct in both places; a module that skips `commit()` is broken in exactly
-//! one, which is why the barrier is named rather than implied.
+//! Natively that is an fsync: when `commit()` returns `Ok` the bytes are on
+//! disk. In a Wasm host it starts the push of the image's filesystem into the
+//! browser's IndexedDB, through the host's `logos_storage_commit` entry point,
+//! and CANNOT WAIT FOR IT — `FS.syncfs` completes on the browser's event loop
+//! and blocking on it needs Asyncify, which the Web container does not build
+//! with. So on emscripten `Ok` means "handed over and in flight", which
+//! completes in the next turn of the event loop; a push that FAILED is reported
+//! on the console and raised by the NEXT `commit()`, so an error is never
+//! silently dropped, only reported late.
+//!
+//! A module written against this contract is correct in both places; a module
+//! that skips `commit()` is broken in exactly one, which is why the barrier is
+//! named rather than implied.
 //!
 //! ## What a key is
 //!
@@ -142,6 +150,21 @@ pub trait Storage: Send {
     fn local_dir(&self) -> Option<&Path> {
         None
     }
+}
+
+/// THE BARRIER, FOR A DIRECTORY THAT IS NOT A `Storage`.
+///
+/// A module core with its own on-disk layout — nested directories, unix modes,
+/// its own staging discipline — should not have to flatten itself into a
+/// key/value store to become correct in a Wasm host. What it is missing is only
+/// the barrier, so the barrier is available on its own: point it at the
+/// directory whose writes must stick and call it where the native code already
+/// fsyncs.
+///
+/// Identical semantics to [`Storage::commit`], including that on emscripten the
+/// push to IndexedDB is in flight when this returns.
+pub fn commit(dir: &Path) -> Result<()> {
+    host_commit(dir)
 }
 
 /// Whether writes are durable the moment they return, without [`Storage::commit`].
@@ -327,6 +350,11 @@ fn host_commit(root: &Path) -> Result<()> {
 /// referenced on emscripten, so no other target can acquire an undefined
 /// symbol from it.
 ///
+/// The call returns as soon as the push is IN FLIGHT — `FS.syncfs` completes on
+/// the browser's event loop and this image cannot block on it without Asyncify.
+/// A push that failed is reported by the NEXT call, which is what keeps a
+/// failure from being dropped rather than merely late.
+///
 /// Non-zero is a failure the host has already described on the console; the
 /// code is carried through so a module can tell "the barrier failed" from "the
 /// barrier is not implemented" (`-1`).
@@ -508,6 +536,19 @@ mod tests {
     fn the_regime_is_reported() {
         assert!(!commit_required());
         assert_eq!(backend_name(), "filesystem");
+    }
+
+    /// The barrier is reachable without a store, because a core with its own
+    /// on-disk layout needs the barrier and not the key/value surface. Natively
+    /// it is a directory fsync, so a real directory succeeds and a path that is
+    /// not one fails rather than quietly reporting durability.
+    #[test]
+    fn the_barrier_is_available_on_its_own() {
+        let dir = tmpdir("barrier");
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::storage::commit(&dir).unwrap();
+        assert!(crate::storage::commit(&dir.join("nope")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

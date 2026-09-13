@@ -234,11 +234,20 @@ fn save(&mut self, name: &str, bytes: &[u8]) -> Result<(), StorageError> {
 | `local_dir()` | The backing directory, when there is one — the escape hatch for path-based crates |
 
 **`commit()` is the whole abstraction.** Data written since the last commit is visible
-to this image immediately and is *not* guaranteed to survive it. Once `commit()` returns
-`Ok`, it is. Natively that is an fsync and nearly free; in a Wasm host it pushes the
-image's filesystem into the browser's IndexedDB through the host's `logos_storage_commit`
-entry point. A module that skips `commit()` works natively and silently loses everything
-in a webview — which is exactly why the barrier is named rather than implied.
+to this image immediately and is *not* guaranteed to outlive it. `commit()` hands it to
+the durable medium. Natively that is an fsync — when it returns `Ok` the bytes are on
+disk. In a Wasm host it starts the push of the image's filesystem into the browser's
+IndexedDB through the host's `logos_storage_commit` entry point and cannot wait for it
+(`FS.syncfs` completes on the browser's event loop; blocking needs Asyncify, which the
+Web container does not build with), so `Ok` there means *handed over and in flight* — and
+a push that failed is raised by the **next** `commit()` rather than dropped. A module
+that skips `commit()` works natively and silently loses everything in a webview, which is
+exactly why the barrier is named rather than implied.
+
+A core with its own on-disk layout — nested directories, unix modes, its own staging
+discipline — does not have to flatten itself into a key/value store to gain this. The
+barrier is also a free function, `storage::commit(dir)`, to be called where the native
+code already fsyncs. That is how `logos-evm-keystore-module` adopts it.
 
 A **key** is a flat, non-empty name: no `/`, no `\`, no `.` or `..` component. Not a
 path. A store is one flat namespace because OPFS and IndexedDB are, the filesystem is
