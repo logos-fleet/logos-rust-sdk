@@ -200,6 +200,60 @@ logos_rust_sdk::set_module_origin("my_tool");   // before the first call
 Set once per process; a second, different name is refused. With none declared the origin is empty,
 which the capability handshake rejects by name — fail closed, never a borrowed identity.
 
+## Persistence — `storage`
+
+A module's state has to survive the module. Natively that is the directory the host
+stamps into the module context; inside a Wasm host (the `web` variant, running in a
+webview) an ordinary `std::fs` write lands in the image's own memory and is gone on the
+next page load, with no error anywhere. `logos_rust_sdk::storage` is the one code path
+that is correct in both.
+
+```rust
+use logos_rust_sdk::storage::{FileStorage, Storage};
+
+fn on_context_ready(&mut self, ctx: &RustModuleContext) {
+    let root = std::path::Path::new(&ctx.instance_persistence_path).join("vaults");
+    self.store = Some(FileStorage::open(root).expect("no persistence path"));
+}
+
+fn save(&mut self, name: &str, bytes: &[u8]) -> Result<(), StorageError> {
+    let store = self.store.as_ref().unwrap();
+    store.write(name, bytes)?;   // atomic replace; visible to this image at once
+    store.commit()               // THE DURABILITY BARRIER — see below
+}
+```
+
+| Operation | Contract |
+|-----------|----------|
+| `read(key)` | The bytes, or `StorageError::NotFound` |
+| `write(key, bytes)` | Atomic replace — never a truncated value, even after a crash |
+| `remove(key)` | `Ok(false)` when absent; removing twice is not an error |
+| `exists(key)` | A question, so an invalid key is *absent* rather than an error |
+| `list()` | Every key, sorted; nothing this store did not write |
+| `commit()` | **The durability barrier.** See below |
+| `local_dir()` | The backing directory, when there is one — the escape hatch for path-based crates |
+
+**`commit()` is the whole abstraction.** Data written since the last commit is visible
+to this image immediately and is *not* guaranteed to survive it. Once `commit()` returns
+`Ok`, it is. Natively that is an fsync and nearly free; in a Wasm host it pushes the
+image's filesystem into the browser's IndexedDB through the host's `logos_storage_commit`
+entry point. A module that skips `commit()` works natively and silently loses everything
+in a webview — which is exactly why the barrier is named rather than implied.
+
+A **key** is a flat, non-empty name: no `/`, no `\`, no `.` or `..` component. Not a
+path. A store is one flat namespace because OPFS and IndexedDB are, the filesystem is
+not, and the intersection is what a module may rely on.
+
+**What the host owes:** before the first dispatch, the store's contents are present.
+Natively that is trivially true; a Wasm host populates its mount from IndexedDB before
+it announces itself as serving, so `on_context_ready` and every method after it see the
+same durable state in both containers.
+
+Backends: `FileStorage` (a directory — the same type natively and on emscripten) and
+`MemoryStorage` (this process only, `local_dir()` is `None`) for unit tests.
+`storage::commit_required()` and `storage::backend_name()` report which regime the build
+is in, for logs.
+
 ## Supporting types
 
 The handful of SDK types that surface directly in module code:
