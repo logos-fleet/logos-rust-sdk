@@ -41,6 +41,7 @@ mod params;
 mod callback;
 mod plugin;
 mod api;
+pub mod storage;
 
 // Re-export public API
 pub use error::LogosError;
