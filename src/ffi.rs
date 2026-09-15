@@ -78,6 +78,16 @@ extern "C" {
     ) -> *mut LpClient;
     pub fn lp_client_destroy(client: *mut LpClient);
 
+    /// NOT DECLARED ON EMSCRIPTEN, because it is not DEFINED there.
+    ///
+    /// logos-protocol's wasm subset implements lp_client_create /
+    /// lp_client_destroy / lp_invoke_async and deliberately leaves this one
+    /// out: a Web Worker is one event loop and the image carries no ASYNCIFY
+    /// (ADR 0004), so a call that blocked for its reply would deadlock the loop
+    /// that delivers it. The binding is gated with the CALL SITES in plugin.rs
+    /// rather than left as a harmless declaration, so that the one file naming
+    /// this symbol also says why it is absent.
+    #[cfg(not(target_os = "emscripten"))]
     pub fn lp_invoke(
         client: *mut LpClient,
         method: *const c_char,

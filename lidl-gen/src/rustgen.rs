@@ -528,6 +528,22 @@ pub fn generate(module: &ModuleDecl) -> String {
         for line in m.description.lines() {
             out.push_str(&format!("    /// {}\n", line));
         }
+        // NO SYNCHRONOUS CALL ON EMSCRIPTEN, and the absence IS the diagnostic.
+        //
+        // A `web` variant runs in a Web Worker: one event loop, no threads, no
+        // ASYNCIFY (ADR 0004). A call that blocked waiting for its reply would
+        // deadlock the loop that was going to deliver it, so logos-protocol's
+        // wasm subset defines lp_invoke_async and deliberately leaves lp_invoke
+        // UNDEFINED, and logos-rust-sdk compiles no synchronous path there.
+        //
+        // Gating the generated method — rather than letting its body fail to
+        // resolve `call_json` — is what makes the error name the AUTHOR's
+        // method: `no method named \`add\` found`, on the line that called it,
+        // with the `_async` twin sitting next to it in the same impl. Without
+        // it, every module with a dependency would fail identically inside
+        // generated code it did not write, whether or not it called a sync
+        // method at all.
+        out.push_str("    #[cfg(not(target_os = \"emscripten\"))]\n");
         out.push_str(&format!(
             "    pub fn {}(&self{}{}) -> Result<{}, LogosError> {{\n\
              \x20       let args = serde_json::Value::Array(vec![{}]);\n\
@@ -562,6 +578,7 @@ pub fn generate(module: &ModuleDecl) -> String {
              \x20   /// Rust has neither overloading nor default arguments, so the\n\
              \x20   /// parameter would break every existing call site. STOPGAP — a later\n\
              \x20   /// breaking release folds this back into the single entry point.\n\
+             \x20   #[cfg(not(target_os = \"emscripten\"))]\n\
              \x20   pub fn {}_with_timeout(&self{}{}, timeout: std::time::Duration) -> Result<{}, LogosError> {{\n\
              \x20       let args = serde_json::Value::Array(vec![{}]);\n\
              \x20       let value = self.proxy.call_json_with_timeout(\"{}\", &args, timeout)?;\n\
@@ -892,6 +909,24 @@ module calc_module {
         assert!(code.contains("pub fn dump_async<F>(&self, callback: F)"));
         assert!(code.contains("pub fn on_result_ready(&mut self)"));
         assert!(code.contains("self.proxy.call_json(\"add\", &args)"));
+        // The SYNC methods — and only those — are compiled out on emscripten.
+        // A `web` variant has no lp_invoke to reach (ADR 0004: one event loop,
+        // no ASYNCIFY), so a module that calls a sync wrapper must fail to
+        // BUILD naming its own call rather than link and hang on a phone.
+        assert!(code.contains(
+            "    #[cfg(not(target_os = \"emscripten\"))]\n    pub fn add(&self, a: i64, b: i64)"
+        ));
+        assert!(code.contains(
+            "#[cfg(not(target_os = \"emscripten\"))]\n    pub fn add_with_timeout(&self"
+        ));
+        // ...and the async twins are NOT gated: they are the whole point of the
+        // gate, and a gated one would leave a `web` module with no door at all.
+        assert!(!code.contains(
+            "#[cfg(not(target_os = \"emscripten\"))]\n    pub fn add_async"
+        ));
+        assert!(!code.contains(
+            "#[cfg(not(target_os = \"emscripten\"))]\n    pub fn add_async_with_timeout"
+        ));
         // Runtime binding: same typed surface, provider chosen at call time
         // (the interface-dependency pattern).
         assert!(code.contains("pub fn bind(module_name: &str) -> Self"));
