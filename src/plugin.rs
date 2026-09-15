@@ -731,17 +731,39 @@ impl PluginProxy {
         self.call(method, empty)
     }
 
+    // ── NO SYNCHRONOUS CALL ON EMSCRIPTEN ──────────────────────────────────
+    //
+    // These four entry points are the crate's only callers of `lp_invoke`, and
+    // logos-protocol's wasm subset does not define it: a `web` variant runs in
+    // a Web Worker — one event loop, no threads, no ASYNCIFY (ADR 0004) — so a
+    // call that blocked waiting for its reply would deadlock the loop that was
+    // going to deliver it. The shape is refused by the target, not missing from
+    // the port.
+    //
+    // COMPILED OUT RATHER THAN STUBBED, for the reason the protocol header
+    // gives at lp_invoke: a stub links, and a module that calls a synchronous
+    // dependency wrapper then fails on a phone. Gone, the failure is a compile
+    // error on the author's own line, naming the method, with the `_async`
+    // twin beside it. It also keeps the undefined symbol out of the staticlib
+    // entirely — a CALL SITE in this crate is what stamps one in (see the note
+    // on lp_token_save_inbound in ffi.rs), so gating the call sites is what
+    // makes a wasm image link at all.
+
     /// Call a plugin method synchronously.
     /// Suitable for use inside a `Q_INVOKABLE`-generated Rust function where the
     /// Qt event loop is already running in the module process.
     ///
     /// Waits the protocol default (20s); see
     /// [`call_sync_with_timeout`](Self::call_sync_with_timeout).
+    ///
+    /// NOT AVAILABLE on `target_os = "emscripten"` — see the block above.
+    #[cfg(not(target_os = "emscripten"))]
     pub fn call_sync<T: ToParam>(&self, method: &str, params: &[T]) -> Result<CallResult, LogosError> {
         self.call_sync_inner(method, params, TimeoutMs::DEFAULT)
     }
 
     /// [`call_sync`](Self::call_sync), bounded to `timeout` for this call only.
+    #[cfg(not(target_os = "emscripten"))]
     pub fn call_sync_with_timeout<T: ToParam>(
         &self,
         method: &str,
@@ -751,6 +773,7 @@ impl PluginProxy {
         self.call_sync_inner(method, params, TimeoutMs::from_duration(timeout)?)
     }
 
+    #[cfg(not(target_os = "emscripten"))]
     fn call_sync_inner<T: ToParam>(
         &self,
         method: &str,
@@ -813,6 +836,7 @@ impl PluginProxy {
     /// Waits the protocol default (20s); the bounded twin is
     /// [`call_json_with_timeout`](Self::call_json_with_timeout), which is what
     /// a generated `<method>_with_timeout` calls.
+    #[cfg(not(target_os = "emscripten"))]
     pub fn call_json(
         &self,
         method: &str,
@@ -831,6 +855,7 @@ impl PluginProxy {
     /// the ABI's millisecond `c_int` would round to `0`, its "use the default"
     /// sentinel — turning a 500µs bound into 20 seconds) or longer than
     /// `c_int::MAX` ms (~24.8 days). It is refused, never clamped.
+    #[cfg(not(target_os = "emscripten"))]
     pub fn call_json_with_timeout(
         &self,
         method: &str,
@@ -840,6 +865,7 @@ impl PluginProxy {
         self.call_json_inner(method, args, TimeoutMs::from_duration(timeout)?)
     }
 
+    #[cfg(not(target_os = "emscripten"))]
     fn call_json_inner(
         &self,
         method: &str,
@@ -909,6 +935,7 @@ impl PluginProxy {
     /// A spelling convenience over [`call_sync`](Self::call_sync) with an empty
     /// slice, so it has no bounded twin of its own — write
     /// `call_sync_with_timeout(method, &[] as &[&str], timeout)`.
+    #[cfg(not(target_os = "emscripten"))]
     pub fn call_sync_no_params(&self, method: &str) -> Result<CallResult, LogosError> {
         let empty: &[&str] = &[];
         self.call_sync(method, empty)
