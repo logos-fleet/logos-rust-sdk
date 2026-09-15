@@ -733,12 +733,13 @@ impl PluginProxy {
 
     // ── NO SYNCHRONOUS CALL ON EMSCRIPTEN ──────────────────────────────────
     //
-    // These four entry points are the crate's only callers of `lp_invoke`, and
-    // logos-protocol's wasm subset does not define it: a `web` variant runs in
-    // a Web Worker — one event loop, no threads, no ASYNCIFY (ADR 0004) — so a
-    // call that blocked waiting for its reply would deadlock the loop that was
-    // going to deliver it. The shape is refused by the target, not missing from
-    // the port.
+    // Everything from here down to `call_sync_no_params` is gated: every public
+    // synchronous entry point, plus the two inners that are the crate's only
+    // callers of `lp_invoke`. logos-protocol's wasm subset does not define that
+    // symbol — a `web` variant runs in a Web Worker, one event loop, no
+    // threads, no ASYNCIFY (ADR 0004), so a call that blocked waiting for its
+    // reply would deadlock the loop that was going to deliver it. The shape is
+    // refused by the target, not missing from the port.
     //
     // COMPILED OUT RATHER THAN STUBBED, for the reason the protocol header
     // gives at lp_invoke: a stub links, and a module that calls a synchronous
